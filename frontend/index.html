@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="id" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DropRoom — Transfer Langsung Antar Perangkat</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@600;700&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="/css/tokens.css" />
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="container topbar-inner">
+      <a href="/" class="brand" id="brandHomeLink">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3v12" />
+            <path d="m8 11 4 4 4-4" />
+            <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
+          </svg>
+        </span>
+        <span class="brand-name">DropRoom</span>
+      </a>
+
+      <div class="topbar-actions">
+        <span id="connectionPill" class="status-pill hidden">
+          <span class="status-dot"></span>
+          <span id="connectionText">Menunggu perangkat</span>
+        </span>
+
+        <button type="button" id="themeToggleBtn" class="icon-btn" aria-label="Ganti mode terang atau gelap" title="Ganti tema">
+          <svg id="themeIconSun" class="hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="4" />
+            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+          </svg>
+          <svg id="themeIconMoon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+          </svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="container main-shell">
+    <!-- Layar Awal (Lobby) -->
+    <section id="lobbyView" class="lobby-view">
+      <div class="lobby-hero">
+        <h1 class="hero-title">Kirim file asli dan teks langsung antar perangkat</h1>
+        <p class="hero-copy">
+          Tanpa akun, tanpa install, dan tanpa kompresi. Data mengalir langsung dari browser ke browser lewat WebRTC dan langsung hilang saat ruangan ditutup.
+        </p>
+      </div>
+
+      <div class="lobby-panels">
+        <div class="lobby-panel lobby-panel-primary">
+          <div class="panel-head">
+            <span class="panel-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                <rect width="5" height="5" x="3" y="3" rx="1" />
+                <rect width="5" height="5" x="16" y="3" rx="1" />
+                <rect width="5" height="5" x="3" y="16" rx="1" />
+                <path d="M21 16h-3a2 2 0 0 0-2 2v3M21 21v.01M12 7v3a2 2 0 0 1-2 2H7M3 12h.01M12 3h.01M12 16v.01M16 12h1M21 12v.01M12 21v-1" />
+              </svg>
+            </span>
+            <h2>Buat ruangan baru</h2>
+          </div>
+          <p class="panel-desc">Buat kode 6 karakter dan QR Code untuk langsung dipindai dari HP atau laptop lain.</p>
+          <button type="button" id="createRoomBtn" class="btn btn-primary btn-lg">
+            Buat ruangan
+          </button>
+        </div>
+
+        <div class="lobby-panel">
+          <div class="panel-head">
+            <span class="panel-icon panel-icon-neutral" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
+                <polyline points="10 17 15 12 10 7" />
+                <line x1="15" x2="3" y1="12" y2="12" />
+              </svg>
+            </span>
+            <h2>Gabung ruangan</h2>
+          </div>
+          <p class="panel-desc">Ketik kode 6 karakter yang tampil di perangkat lawan.</p>
+          <form id="joinRoomForm" class="join-form" novalidate>
+            <input
+              type="text"
+              id="joinCodeInput"
+              class="code-input"
+              maxlength="6"
+              autocomplete="off"
+              autocapitalize="characters"
+              spellcheck="false"
+              placeholder="K7M49P"
+              aria-label="Kode ruangan 6 karakter"
+            />
+            <button type="submit" id="joinRoomBtn" class="btn btn-secondary">
+              Gabung
+            </button>
+          </form>
+          <p id="lobbyError" class="inline-error hidden" role="alert"></p>
+        </div>
+      </div>
+
+      <div class="lobby-footnote">
+        <span>Jalur terenkripsi P2P tanpa simpan di server</span>
+        <span>Otomatis hangus 10 menit</span>
+        <span>Mendukung mode sekali unduh lalu hapus</span>
+      </div>
+    </section>
+
+    <!-- Layar Ruang Transfer Aktif -->
+    <section id="roomView" class="room-view hidden">
+      <!-- Strip Info Ruangan -->
+      <div class="room-bar">
+        <div class="room-bar-left">
+          <div class="code-chip">
+            <span class="code-chip-label">Ruangan</span>
+            <span id="roomCodeDisplay" class="code-chip-value">------</span>
+            <button type="button" id="copyCodeBtn" class="chip-action-btn" title="Salin kode ruangan">Salin</button>
+          </div>
+          <span id="timerBadge" class="timer-pill" title="Sisa waktu ruangan">10:00</span>
+        </div>
+
+        <div class="room-bar-right">
+          <button type="button" id="qrToggleBtn" class="btn btn-ghost btn-sm hidden">
+            Sembunyikan QR
+          </button>
+          <button type="button" id="copyLinkBtn" class="btn btn-ghost btn-sm">
+            Salin tautan
+          </button>
+          <button type="button" id="destroyRoomBtn" class="btn btn-danger btn-sm">
+            Tutup & hapus
+          </button>
+        </div>
+      </div>
+
+      <!-- Panel QR yang Otomatis Melipat Saat Sudah Terhubung -->
+      <div id="qrSection" class="qr-drawer hidden">
+        <div class="qr-drawer-inner">
+          <div id="qrContainer" class="qr-frame"></div>
+          <div class="qr-drawer-info">
+            <h3>Pindai QR dari kamera HP</h3>
+            <p>Arahkan kamera HP ke kode di samping atau ketik kode ruangan di browser perangkat kedua untuk mulai mengirim file dan teks.</p>
+            <div id="localhostHint" class="inline-note hidden">
+              Kamu membuka lewat localhost. Agar bisa dipindai dari HP di Wi-Fi yang sama, buka aplikasi memakai alamat IP laptop (misal 192.168.x.x:8000).
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Peringatan Koneksi + Tombol Sambung Ulang -->
+      <div id="connectionHelpBox" class="inline-note inline-note-warn hidden">
+        <span class="warn-text">Koneksi langsung butuh waktu lebih lama untuk menembus jaringan. Coba sambung ulang jika tidak kunjung terhubung.</span>
+        <button type="button" id="reconnectBtn" class="btn btn-secondary btn-sm">Sambung ulang</button>
+      </div>
+
+      <!-- Banner Sinkronisasi Riwayat Manual -->
+      <div id="syncHistoryBanner" class="sync-banner hidden" role="status">
+        <div class="sync-banner-copy">
+          <span class="sync-banner-title">Perangkat baru terhubung</span>
+          <span id="syncHistoryText" class="sync-banner-desc"></span>
+        </div>
+        <div class="sync-banner-actions">
+          <button type="button" id="syncHistoryBtn" class="btn btn-primary btn-sm">Kirim riwayat</button>
+          <button type="button" id="dismissSyncBtn" class="btn btn-ghost btn-sm">Abaikan</button>
+        </div>
+      </div>
+
+      <!-- Area Aliran Transfer (Chat & File Kronologis) -->
+      <div class="workspace-frame">
+        <div id="streamArea" class="stream-area">
+          <div id="emptyFeedState" class="empty-stream">
+            <p id="emptyStreamTitle" class="empty-stream-title">Menunggu perangkat kedua bergabung</p>
+            <p id="emptyStreamSub" class="empty-stream-sub">Setelah terhubung, seret file ke mana saja di layar ini atau ketik pesan di bawah.</p>
+          </div>
+          <div id="transferFeed" class="transfer-feed"></div>
+        </div>
+
+        <!-- Bar Antrean Persetujuan Sebelum Kirim -->
+        <div id="pendingQueueBar" class="pending-queue-bar hidden">
+          <div class="pending-queue-header">
+            <span id="pendingQueueTitle" class="pending-queue-title">Siap dikirim</span>
+            <button type="button" id="clearQueueBtn" class="subtle-copy-btn">Hapus semua</button>
+          </div>
+          <div id="pendingQueueList" class="pending-queue-list"></div>
+        </div>
+
+        <!-- Bar Kontrol Bawah -->
+        <form id="textForm" class="composer-bar">
+          <input type="file" id="fileInput" class="sr-only" multiple />
+
+          <button type="button" id="attachFileBtn" class="composer-icon-btn" title="Pilih file untuk dikirim" aria-label="Pilih file" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+            </svg>
+          </button>
+
+          <label id="burnToggleLabel" class="burn-pill-toggle" for="burnToggle" title="Jika aktif, seluruh file yang dikirim akan langsung dihapus setelah diunduh sekali">
+            <input type="checkbox" id="burnToggle" disabled />
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z" />
+            </svg>
+            <span class="burn-pill-text">Sekali unduh</span>
+          </label>
+
+          <textarea
+            id="textInput"
+            class="composer-input"
+            rows="1"
+            placeholder="Ketik pesan atau tempel tautan..."
+            disabled
+          ></textarea>
+
+          <button type="submit" id="sendTextBtn" class="btn btn-primary composer-send-btn" disabled>
+            Kirim
+          </button>
+        </form>
+      </div>
+    </section>
+  </main>
+
+  <!-- Overlay Seret & Lepas Seluruh Layar -->
+  <div id="globalDropOverlay" class="drop-overlay hidden" aria-hidden="true">
+    <div class="drop-overlay-box">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+        <polyline points="17 8 12 3 7 8" />
+        <line x1="12" x2="12" y1="3" y2="15" />
+      </svg>
+      <p>Lepas file di sini untuk masuk ke antrean kirim</p>
+    </div>
+  </div>
+
+  <!-- Modal Pratinjau Media (Gambar, Video, Audio, PDF) -->
+  <div id="previewModal" class="preview-modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="previewModalTitle">
+    <div class="preview-modal-card">
+      <div class="preview-modal-header">
+        <h3 id="previewModalTitle" class="preview-modal-title">Pratinjau</h3>
+        <button type="button" id="closePreviewBtn" class="icon-btn" aria-label="Tutup pratinjau">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
+      <div id="previewModalBody" class="preview-modal-body"></div>
+    </div>
+  </div>
+
+  <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>
