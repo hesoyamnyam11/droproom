@@ -10,13 +10,13 @@
     href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@600;700&display=swap"
     rel="stylesheet"
   />
-  <link rel="stylesheet" href="./css/tokens.css" />
-  <link rel="stylesheet" href="./css/styles.css" />
+  <link rel="stylesheet" href="/css/tokens.css" />
+  <link rel="stylesheet" href="/css/styles.css" />
 </head>
 <body>
   <header class="topbar">
     <div class="container topbar-inner">
-      <a href="./" class="brand" id="brandHomeLink">
+      <a href="/" class="brand" id="brandHomeLink">
         <span class="brand-mark" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 3v12" />
@@ -116,6 +116,7 @@
 
     <!-- Layar Ruang Transfer Aktif -->
     <section id="roomView" class="room-view hidden">
+      <!-- Strip Info Ruangan -->
       <div class="room-bar">
         <div class="room-bar-left">
           <div class="code-chip">
@@ -139,6 +140,7 @@
         </div>
       </div>
 
+      <!-- Panel QR yang Otomatis Melipat Saat Sudah Terhubung -->
       <div id="qrSection" class="qr-drawer hidden">
         <div class="qr-drawer-inner">
           <div id="qrContainer" class="qr-frame"></div>
@@ -146,17 +148,19 @@
             <h3>Pindai QR dari kamera HP</h3>
             <p>Arahkan kamera HP ke kode di samping atau ketik kode ruangan di browser perangkat kedua untuk mulai mengirim file dan teks.</p>
             <div id="localhostHint" class="inline-note hidden">
-              Kamu membuka lewat localhost. Buka lewat alamat online atau IP laptop agar QR bisa dipindai HP.
+              Kamu membuka lewat localhost. Agar bisa dipindai dari HP di Wi-Fi yang sama, buka aplikasi memakai alamat IP laptop (misal 192.168.x.x:8000).
             </div>
           </div>
         </div>
       </div>
 
+      <!-- Peringatan Koneksi + Tombol Sambung Ulang -->
       <div id="connectionHelpBox" class="inline-note inline-note-warn hidden">
         <span class="warn-text">Koneksi langsung butuh waktu lebih lama untuk menembus jaringan. Coba sambung ulang jika tidak kunjung terhubung.</span>
         <button type="button" id="reconnectBtn" class="btn btn-secondary btn-sm">Sambung ulang</button>
       </div>
 
+      <!-- Banner Sinkronisasi Riwayat Manual -->
       <div id="syncHistoryBanner" class="sync-banner hidden" role="status">
         <div class="sync-banner-copy">
           <span class="sync-banner-title">Perangkat baru terhubung</span>
@@ -168,6 +172,7 @@
         </div>
       </div>
 
+      <!-- Area Aliran Transfer (Chat & File Kronologis) -->
       <div class="workspace-frame">
         <div id="streamArea" class="stream-area">
           <div id="emptyFeedState" class="empty-stream">
@@ -177,6 +182,7 @@
           <div id="transferFeed" class="transfer-feed"></div>
         </div>
 
+        <!-- Bar Antrean Persetujuan Sebelum Kirim -->
         <div id="pendingQueueBar" class="pending-queue-bar hidden">
           <div class="pending-queue-header">
             <span id="pendingQueueTitle" class="pending-queue-title">Siap dikirim</span>
@@ -185,6 +191,7 @@
           <div id="pendingQueueList" class="pending-queue-list"></div>
         </div>
 
+        <!-- Bar Kontrol Bawah -->
         <form id="textForm" class="composer-bar">
           <input type="file" id="fileInput" class="sr-only" multiple />
 
@@ -218,6 +225,7 @@
     </section>
   </main>
 
+  <!-- Overlay Seret & Lepas Seluruh Layar -->
   <div id="globalDropOverlay" class="drop-overlay hidden" aria-hidden="true">
     <div class="drop-overlay-box">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -229,6 +237,7 @@
     </div>
   </div>
 
+  <!-- Modal Pratinjau Media (Gambar, Video, Audio, PDF) -->
   <div id="previewModal" class="preview-modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="previewModalTitle">
     <div class="preview-modal-card">
       <div class="preview-modal-header">
@@ -246,8 +255,6 @@
 
   <div id="toastContainer" class="toast-container" aria-live="polite"></div>
 
-  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
-  <script type="module" src="./js/app.js"></script>
+  <script type="module" src="/js/app.js"></script>
 </body>
 </html>

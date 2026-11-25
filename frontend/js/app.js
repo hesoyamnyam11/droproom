@@ -1,9 +1,6 @@
 import { initTheme } from "./theme.js";
 import { DirectPeerSession } from "./webrtc.js";
 
-const ROOM_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-const ROOM_TTL_SECONDS = 600;
-
 const lobbyView = document.getElementById("lobbyView");
 const roomView = document.getElementById("roomView");
 const createRoomBtn = document.getElementById("createRoomBtn");
@@ -58,39 +55,16 @@ const previewModalBody = document.getElementById("previewModalBody");
 
 let activeSession = null;
 let activeRoomCode = null;
-let activeRoomRole = null;
 let activeJoinUrl = "";
 let hasQrSvg = false;
 let timerInterval = null;
-let remainingSeconds = ROOM_TTL_SECONDS;
+let remainingSeconds = 600;
 let feedItemCount = 0;
 let dragDepth = 0;
 const blobUrls = new Map();
 let sessionHistory = [];
 let pendingFiles = [];
 let sendQueue = Promise.resolve();
-
-function generateRoomCode() {
-  const bytes = new Uint8Array(6);
-  window.crypto.getRandomValues(bytes);
-  let code = "";
-  for (let i = 0; i < 6; i += 1) {
-    code += ROOM_ALPHABET[bytes[i] % ROOM_ALPHABET.length];
-  }
-  return code;
-}
-
-function buildJoinUrl(code) {
-  return `${window.location.origin}${window.location.pathname}?room=${code}`;
-}
-
-function generateQrSvgClient(url) {
-  if (typeof window.qrcode !== "function") return "";
-  const qr = window.qrcode(0, "M");
-  qr.addData(url);
-  qr.make();
-  return qr.createSvgTag(6, 2);
-}
 
 function showToast(message) {
   const el = document.createElement("div");
@@ -454,10 +428,6 @@ function startCountdown(seconds) {
     renderTimer();
     if (remainingSeconds <= 0) {
       clearInterval(timerInterval);
-      if (activeRoomRole === "host" && activeSession) {
-        activeSession.notifyRoomExpired();
-      }
-      resetToLobby("Waktu ruangan 10 menit telah habis.");
     }
   }, 1000);
 }
@@ -483,7 +453,6 @@ function resetToLobby(notice) {
   sessionHistory = [];
 
   activeRoomCode = null;
-  activeRoomRole = null;
   activeJoinUrl = "";
   hasQrSvg = false;
   feedItemCount = 0;
@@ -590,10 +559,9 @@ function appendTextCard({ id, content, direction }) {
   scrollStreamToBottom();
 }
 
-function enterRoomUI({ code, role, qrSvg, joinUrl, ttlSeconds }) {
+function enterRoomUI({ code, qrSvg, joinUrl, ttlSeconds, iceServers }) {
   activeRoomCode = code;
-  activeRoomRole = role;
-  activeJoinUrl = joinUrl || buildJoinUrl(code);
+  activeJoinUrl = joinUrl || `${window.location.origin}/?room=${code}`;
   hasQrSvg = Boolean(qrSvg);
 
   lobbyError.classList.add("hidden");
@@ -616,13 +584,10 @@ function enterRoomUI({ code, role, qrSvg, joinUrl, ttlSeconds }) {
 
   activeSession = new DirectPeerSession({
     code,
-    role,
-    getRemainingSeconds: () => remainingSeconds,
+    iceServers,
     callbacks: {
       onJoined: ({ remainingSeconds: rem }) => {
-        if (typeof rem === "number" && rem > 0) {
-          startCountdown(rem);
-        }
+        startCountdown(rem);
       },
       onStatusChange: (mode, text) => {
         setStatusPill(mode, text);
@@ -642,14 +607,10 @@ function enterRoomUI({ code, role, qrSvg, joinUrl, ttlSeconds }) {
         connectionHelpBox.classList.remove("hidden");
       },
       onError: (errCode) => {
-        if (errCode === "code_taken" && role === "host") {
-          handleCreateRoom();
-          return;
-        }
         const msgMap = {
-          room_not_found: "Ruangan tidak ditemukan atau pembuat ruangan sudah keluar.",
+          room_not_found: "Ruangan tidak ditemukan atau sudah kedaluwarsa.",
           room_full: "Ruangan ini sudah penuh (maksimal 2 perangkat).",
-          peer_sdk_missing: "Gagal memuat layanan koneksi P2P. Periksa koneksi internetmu.",
+          payload_too_large: "Pesan signaling terlalu besar.",
         };
         resetToLobby(msgMap[errCode] || "Gagal terhubung ke ruangan.");
       },
@@ -753,22 +714,32 @@ function enterRoomUI({ code, role, qrSvg, joinUrl, ttlSeconds }) {
   activeSession.connect();
 }
 
-function handleCreateRoom() {
+async function handleCreateRoom() {
+  createRoomBtn.disabled = true;
   lobbyError.classList.add("hidden");
-  const code = generateRoomCode();
-  const joinUrl = buildJoinUrl(code);
-  const qrSvg = generateQrSvgClient(joinUrl);
-
-  enterRoomUI({
-    code,
-    role: "host",
-    qrSvg,
-    joinUrl,
-    ttlSeconds: ROOM_TTL_SECONDS,
-  });
+  try {
+    const resp = await fetch("/api/v1/rooms", { method: "POST" });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.detail || "Gagal membuat ruangan.");
+    }
+    const data = await resp.json();
+    enterRoomUI({
+      code: data.code,
+      qrSvg: data.qr_svg,
+      joinUrl: data.join_url,
+      ttlSeconds: data.ttl_seconds,
+      iceServers: data.ice_servers,
+    });
+  } catch (err) {
+    lobbyError.textContent = err.message;
+    lobbyError.classList.remove("hidden");
+  } finally {
+    createRoomBtn.disabled = false;
+  }
 }
 
-function handleJoinRoom(rawCode) {
+async function handleJoinRoom(rawCode) {
   const code = rawCode.trim().toUpperCase();
   if (!/^[A-HJ-NP-Z2-9]{6}$/.test(code)) {
     lobbyError.textContent = "Masukkan 6 karakter kode ruangan yang valid.";
@@ -777,13 +748,27 @@ function handleJoinRoom(rawCode) {
   }
 
   lobbyError.classList.add("hidden");
-  enterRoomUI({
-    code,
-    role: "guest",
-    qrSvg: null,
-    joinUrl: buildJoinUrl(code),
-    ttlSeconds: ROOM_TTL_SECONDS,
-  });
+  try {
+    const resp = await fetch(`/api/v1/rooms/${encodeURIComponent(code)}`);
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.detail || "Ruangan tidak ditemukan.");
+    }
+    const data = await resp.json();
+    if (data.is_full) {
+      throw new Error("Ruangan sudah penuh (maksimal 2 perangkat).");
+    }
+    enterRoomUI({
+      code: data.code,
+      qrSvg: null,
+      joinUrl: `${window.location.origin}/?room=${data.code}`,
+      ttlSeconds: data.remaining_seconds,
+      iceServers: data.ice_servers,
+    });
+  } catch (err) {
+    lobbyError.textContent = err.message;
+    lobbyError.classList.remove("hidden");
+  }
 }
 
 function enqueueFiles(filesArray, burn) {
