@@ -1,52 +1,174 @@
-// Pengelola koneksi langsung WebRTC DataChannel (2 perangkat) + Auto-Retry
+// Pengelola koneksi langsung WebRTC P2P versi statis (via PeerJS signaling)
 const CHUNK_SIZE = 32 * 1024;
 const MAX_BUFFERED_AMOUNT = 256 * 1024;
 const LOW_BUFFERED_THRESHOLD = 64 * 1024;
-const CONNECT_WATCHDOG_MS = 5500;
+const CONNECT_WATCHDOG_MS = 7000;
+const PEER_PREFIX = "droproom-p2p-v1-";
+
+const DEFAULT_ICE_SERVERS = [
+  { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
+  { urls: "stun:stun.cloudflare.com:3478" },
+];
 
 export class DirectPeerSession {
-  constructor({ code, iceServers, callbacks }) {
+  constructor({ code, role, getRemainingSeconds, callbacks }) {
     this.code = code;
-    this.iceServers = iceServers;
+    this.role = role; // "host" | "guest"
+    this.getRemainingSeconds = getRemainingSeconds;
     this.cb = callbacks;
 
-    this.ws = null;
-    this.pc = null;
-    this.dc = null;
-    this.role = null;
-    this.pendingCandidates = [];
+    this.peer = null;
+    this.conn = null;
     this.incomingFiles = new Map();
     this.currentIncomingFileId = null;
+    this.recvQueue = Promise.resolve();
     this.connectTimer = null;
-    this.autoRetryCount = 0;
     this.isClosing = false;
   }
 
   connect() {
-    this.isClosing = false;
-    if (this.ws) {
-      try { this.ws.close(); } catch {}
-      this.ws = null;
+    if (typeof window.Peer !== "function") {
+      this.cb.onError("peer_sdk_missing");
+      return;
     }
 
-    const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${wsProto}//${window.location.host}/ws/${encodeURIComponent(this.code)}`;
-    this.ws = new WebSocket(wsUrl);
+    this.isClosing = false;
+    this._destroyPeerOnly();
 
-    this.ws.addEventListener("message", async (event) => {
-      let msg;
-      try {
-        msg = JSON.parse(event.data);
-      } catch {
-        return;
-      }
-      await this._handleSignal(msg);
+    const peerId = this.role === "host" ? `${PEER_PREFIX}${this.code}` : undefined;
+    this.peer = new window.Peer(peerId, {
+      config: { iceServers: DEFAULT_ICE_SERVERS },
     });
 
-    this.ws.addEventListener("close", () => {
+    this.peer.on("open", () => {
+      if (this.isClosing) return;
+      if (this.role === "host") {
+        this.cb.onJoined({
+          role: "host",
+          peerCount: 1,
+          remainingSeconds: this.getRemainingSeconds(),
+        });
+        this.cb.onStatusChange("waiting", "Menunggu perangkat kedua");
+      } else {
+        this.cb.onStatusChange("waiting", "Menghubungkan jalur langsung...");
+        this._connectToHost();
+      }
+    });
+
+    this.peer.on("connection", (incomingConn) => {
+      if (this.role !== "host") return;
+
+      // Batasi ketat maksimal 2 perangkat per ruangan
+      if (this.conn && this.conn.open) {
+        incomingConn.on("open", () => {
+          try {
+            incomingConn.send(JSON.stringify({ type: "room_full" }));
+          } catch {}
+          setTimeout(() => {
+            try { incomingConn.close(); } catch {}
+          }, 250);
+        });
+        return;
+      }
+
+      this.cb.onStatusChange("waiting", "Perangkat ditemukan, menghubungkan...");
+      this._attachConnection(incomingConn);
+    });
+
+    this.peer.on("disconnected", () => {
+      if (!this.isClosing && this.peer && !this.peer.destroyed) {
+        try {
+          this.peer.reconnect();
+        } catch {}
+      }
+    });
+
+    this.peer.on("error", (err) => {
+      if (this.isClosing) return;
+      const errType = err?.type || "";
+      if (errType === "peer-unavailable") {
+        this._clearWatchdog();
+        this.cb.onError("room_not_found");
+        this.cleanup();
+      } else if (errType === "unavailable-id") {
+        this._clearWatchdog();
+        this.cb.onError("code_taken");
+        this.cleanup();
+      } else {
+        this.cb.onIceTrouble();
+      }
+    });
+  }
+
+  _connectToHost() {
+    if (!this.peer || this.peer.destroyed) return;
+    this._closeConnectionOnly();
+    this._armWatchdog();
+
+    const conn = this.peer.connect(`${PEER_PREFIX}${this.code}`, {
+      reliable: true,
+      serialization: "raw",
+    });
+    this._attachConnection(conn);
+  }
+
+  _attachConnection(conn) {
+    this._closeConnectionOnly();
+    this.conn = conn;
+
+    const configureChannel = () => {
+      if (this.conn?.dataChannel) {
+        this.conn.dataChannel.binaryType = "arraybuffer";
+        this.conn.dataChannel.bufferedAmountLowThreshold = LOW_BUFFERED_THRESHOLD;
+      }
+    };
+
+    configureChannel();
+
+    conn.on("open", () => {
+      if (this.isClosing || this.conn !== conn) return;
+      configureChannel();
       this._clearWatchdog();
+
+      if (this.role === "host") {
+        try {
+          conn.send(
+            JSON.stringify({
+              type: "room_meta",
+              remainingSeconds: this.getRemainingSeconds(),
+            })
+          );
+        } catch {}
+      }
+
+      this.cb.onStatusChange("connected", "Terhubung langsung (P2P)");
+      this.cb.onChannelReady(true);
+    });
+
+    conn.on("data", (data) => {
+      if (this.isClosing || this.conn !== conn) return;
+      this.recvQueue = this.recvQueue.then(() => this._handleDataMessage(data));
+    });
+
+    conn.on("close", () => {
+      if (this.isClosing || this.conn !== conn) return;
+      this._clearWatchdog();
+      this.conn = null;
+      this.incomingFiles.clear();
+      this.currentIncomingFileId = null;
+
+      if (this.role === "host") {
+        this.cb.onStatusChange("waiting", "Perangkat lain keluar, menunggu lagi...");
+        this.cb.onPeerDisconnected();
+      } else {
+        this.cb.onStatusChange("disconnected", "Terputus dari pembuat ruangan");
+        this.cb.onPeerDisconnected();
+        this.cb.onIceTrouble();
+      }
+    });
+
+    conn.on("error", () => {
       if (!this.isClosing) {
-        this.cb.onStatusChange("disconnected", "Koneksi signaling terputus");
         this.cb.onIceTrouble();
       }
     });
@@ -63,191 +185,29 @@ export class DirectPeerSession {
     this._clearWatchdog();
     this.connectTimer = setTimeout(() => {
       if (this.isClosing || this.isReady()) return;
-      if (this.role === "host" && this.autoRetryCount < 1 && this.ws?.readyState === WebSocket.OPEN) {
-        this.autoRetryCount += 1;
-        this.cb.onStatusChange("waiting", "Mencoba jalur langsung ulang...");
-        this._startOffer();
-      } else {
-        this.cb.onIceTrouble();
-      }
+      this.cb.onIceTrouble();
     }, CONNECT_WATCHDOG_MS);
   }
 
   async retryConnection() {
     if (this.isClosing) return;
-    this.autoRetryCount = 0;
     this.cb.onStatusChange("waiting", "Menyambung ulang...");
 
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+    if (!this.peer || this.peer.destroyed) {
       this.connect();
       return;
     }
-    await this._startOffer();
-  }
-
-  async _handleSignal(msg) {
-    switch (msg.type) {
-      case "error":
-        this.cb.onError(msg.code);
-        this.cleanup();
-        break;
-
-      case "joined":
-        this.role = msg.role;
-        this.autoRetryCount = 0;
-        this.cb.onJoined({
-          role: msg.role,
-          peerCount: msg.peer_count,
-          remainingSeconds: msg.remaining_seconds,
-        });
-        if (msg.peer_count === 1) {
-          this.cb.onStatusChange("waiting", "Menunggu perangkat kedua");
-        } else {
-          this.cb.onStatusChange("waiting", "Menghubungkan jalur langsung...");
-          this._armWatchdog();
-        }
-        break;
-
-      case "peer_joined":
-        this.autoRetryCount = 0;
-        this.cb.onStatusChange("waiting", "Perangkat ditemukan, menghubungkan...");
-        await this._startOffer();
-        break;
-
-      case "offer":
-        await this._handleOffer(msg.sdp);
-        break;
-
-      case "answer":
-        await this._handleAnswer(msg.sdp);
-        break;
-
-      case "ice":
-        await this._handleRemoteIce(msg.candidate);
-        break;
-
-      case "peer_left":
-        this._clearWatchdog();
-        this._closePeerConnectionOnly();
-        this.cb.onStatusChange("waiting", "Perangkat lain keluar, menunggu lagi...");
-        this.cb.onPeerDisconnected();
-        break;
-
-      case "room_closed":
-        this.cb.onRoomDestroyed("Ruangan ditutup dan seluruh data telah dihapus.");
-        this.cleanup();
-        break;
-
-      case "room_expired":
-        this.cb.onRoomDestroyed("Waktu ruangan 10 menit telah habis.");
-        this.cleanup();
-        break;
-    }
-  }
-
-  _sendSignal(payload) {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(payload));
-    }
-  }
-
-  _createPeerConnection() {
-    this._closePeerConnectionOnly();
-    this.pc = new RTCPeerConnection({ iceServers: this.iceServers });
-
-    this.pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        this._sendSignal({ type: "ice", candidate: event.candidate });
-      }
-    };
-
-    this.pc.oniceconnectionstatechange = () => {
-      if (!this.pc) return;
-      const state = this.pc.iceConnectionState;
-      if (state === "failed" || state === "disconnected") {
-        this.cb.onIceTrouble();
-      }
-    };
-
-    this.pc.ondatachannel = (event) => {
-      this._setupDataChannel(event.channel);
-    };
-  }
-
-  _setupDataChannel(channel) {
-    this.dc = channel;
-    this.dc.binaryType = "arraybuffer";
-    this.dc.bufferedAmountLowThreshold = LOW_BUFFERED_THRESHOLD;
-
-    this.dc.onopen = () => {
-      this._clearWatchdog();
-      this.autoRetryCount = 0;
-      this.cb.onStatusChange("connected", "Terhubung langsung (P2P)");
-      this.cb.onChannelReady(true);
-    };
-
-    this.dc.onclose = () => {
-      this.cb.onChannelReady(false);
-    };
-
-    this.dc.onmessage = (event) => {
-      this._handleDataMessage(event.data);
-    };
-  }
-
-  async _startOffer() {
-    this._createPeerConnection();
-    const channel = this.pc.createDataChannel("droproom", { ordered: true });
-    this._setupDataChannel(channel);
-
-    const offer = await this.pc.createOffer({ iceRestart: true });
-    await this.pc.setLocalDescription(offer);
-    this._sendSignal({ type: "offer", sdp: offer });
-    this._armWatchdog();
-  }
-
-  async _handleOffer(sdp) {
-    this._createPeerConnection();
-    await this.pc.setRemoteDescription(new RTCSessionDescription(sdp));
-    await this._flushPendingCandidates();
-
-    const answer = await this.pc.createAnswer();
-    await this.pc.setLocalDescription(answer);
-    this._sendSignal({ type: "answer", sdp: answer });
-    this._armWatchdog();
-  }
-
-  async _handleAnswer(sdp) {
-    if (!this.pc) return;
-    await this.pc.setRemoteDescription(new RTCSessionDescription(sdp));
-    await this._flushPendingCandidates();
-  }
-
-  async _handleRemoteIce(candidate) {
-    if (!candidate) return;
-    if (this.pc && this.pc.remoteDescription) {
+    if (this.peer.disconnected) {
       try {
-        await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
-      } catch {
-        // Abaikan kandidat terlambat
-      }
-    } else {
-      this.pendingCandidates.push(candidate);
+        this.peer.reconnect();
+      } catch {}
+    }
+    if (this.role === "guest") {
+      this._connectToHost();
     }
   }
 
-  async _flushPendingCandidates() {
-    while (this.pendingCandidates.length > 0 && this.pc && this.pc.remoteDescription) {
-      const candidate = this.pendingCandidates.shift();
-      try {
-        await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
-      } catch {
-        // Abaikan
-      }
-    }
-  }
-
-  _handleDataMessage(data) {
+  async _handleDataMessage(data) {
     if (typeof data === "string") {
       let msg;
       try {
@@ -256,7 +216,22 @@ export class DirectPeerSession {
         return;
       }
 
-      if (msg.type === "text") {
+      if (msg.type === "room_full") {
+        this.cb.onError("room_full");
+        this.cleanup();
+      } else if (msg.type === "room_meta") {
+        this.cb.onJoined({
+          role: "guest",
+          peerCount: 2,
+          remainingSeconds: msg.remainingSeconds,
+        });
+      } else if (msg.type === "room_closed") {
+        this.cb.onRoomDestroyed("Ruangan ditutup dan seluruh data telah dihapus.");
+        this.cleanup();
+      } else if (msg.type === "room_expired") {
+        this.cb.onRoomDestroyed("Waktu ruangan 10 menit telah habis.");
+        this.cleanup();
+      } else if (msg.type === "text") {
         this.cb.onTextReceived(msg);
       } else if (msg.type === "file_meta") {
         this.incomingFiles.set(msg.id, {
@@ -281,11 +256,22 @@ export class DirectPeerSession {
       return;
     }
 
+    // Potongan biner file
+    let buffer = null;
+    if (data instanceof ArrayBuffer) {
+      buffer = data;
+    } else if (data instanceof Blob) {
+      buffer = await data.arrayBuffer();
+    } else if (ArrayBuffer.isView(data)) {
+      buffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+    }
+    if (!buffer) return;
+
     const activeId = this.currentIncomingFileId;
     if (!activeId || !this.incomingFiles.has(activeId)) return;
     const entry = this.incomingFiles.get(activeId);
-    entry.chunks.push(data);
-    entry.receivedBytes += data.byteLength;
+    entry.chunks.push(buffer);
+    entry.receivedBytes += buffer.byteLength;
 
     const elapsedSec = Math.max(0.05, (performance.now() - entry.startedAt) / 1000);
     const speedBps = entry.receivedBytes / elapsedSec;
@@ -293,7 +279,7 @@ export class DirectPeerSession {
   }
 
   isReady() {
-    return Boolean(this.dc && this.dc.readyState === "open");
+    return Boolean(this.conn && this.conn.open);
   }
 
   sendText(content) {
@@ -304,13 +290,22 @@ export class DirectPeerSession {
       content,
       timestamp: Date.now(),
     };
-    this.dc.send(JSON.stringify(payload));
+    this.conn.send(JSON.stringify(payload));
     return payload;
   }
 
   notifyFileBurned(fileId) {
     if (!this.isReady()) return;
-    this.dc.send(JSON.stringify({ type: "file_burned", id: fileId }));
+    this.conn.send(JSON.stringify({ type: "file_burned", id: fileId }));
+  }
+
+  notifyRoomExpired() {
+    if (this.isReady()) {
+      try {
+        this.conn.send(JSON.stringify({ type: "room_expired" }));
+      } catch {}
+    }
+    setTimeout(() => this.cleanup(), 150);
   }
 
   async sendFile(fileOrBlob, burnAfterDownload, onProgress, metaOverride = {}) {
@@ -328,7 +323,7 @@ export class DirectPeerSession {
       burnAfterDownload: Boolean(burnAfterDownload),
     };
 
-    this.dc.send(JSON.stringify(meta));
+    this.conn.send(JSON.stringify(meta));
 
     let offset = 0;
     const startedAt = performance.now();
@@ -338,19 +333,24 @@ export class DirectPeerSession {
         throw new Error("Koneksi terputus saat mengirim file.");
       }
 
-      if (this.dc.bufferedAmount > MAX_BUFFERED_AMOUNT) {
+      const dc = this.conn.dataChannel;
+      if (dc && dc.bufferedAmount > MAX_BUFFERED_AMOUNT) {
         await new Promise((resolve) => {
-          const handler = () => {
-            this.dc.removeEventListener("bufferedamountlow", handler);
+          let done = false;
+          const finish = () => {
+            if (done) return;
+            done = true;
+            dc.removeEventListener("bufferedamountlow", finish);
             resolve();
           };
-          this.dc.addEventListener("bufferedamountlow", handler);
+          dc.addEventListener("bufferedamountlow", finish);
+          setTimeout(finish, 180);
         });
       }
 
       const slice = fileOrBlob.slice(offset, offset + CHUNK_SIZE);
       const buffer = await slice.arrayBuffer();
-      this.dc.send(buffer);
+      this.conn.send(buffer);
       offset += buffer.byteLength;
 
       const elapsedSec = Math.max(0.05, (performance.now() - startedAt) / 1000);
@@ -360,38 +360,41 @@ export class DirectPeerSession {
       }
     }
 
-    this.dc.send(JSON.stringify({ type: "file_end", id: fileId }));
+    this.conn.send(JSON.stringify({ type: "file_end", id: fileId }));
     return meta;
   }
 
   requestDestroyRoom() {
     this.isClosing = true;
     this._clearWatchdog();
-    this._sendSignal({ type: "close_room" });
-    this.cleanup();
+    if (this.conn && this.conn.open) {
+      try {
+        this.conn.send(JSON.stringify({ type: "room_closed" }));
+      } catch {}
+    }
+    setTimeout(() => this.cleanup(), 150);
   }
 
-  _closePeerConnectionOnly() {
-    if (this.dc) {
-      try { this.dc.close(); } catch {}
-      this.dc = null;
+  _closeConnectionOnly() {
+    if (this.conn) {
+      try { this.conn.close(); } catch {}
+      this.conn = null;
     }
-    if (this.pc) {
-      try { this.pc.close(); } catch {}
-      this.pc = null;
-    }
-    this.pendingCandidates = [];
     this.incomingFiles.clear();
     this.currentIncomingFileId = null;
+  }
+
+  _destroyPeerOnly() {
+    this._closeConnectionOnly();
+    if (this.peer) {
+      try { this.peer.destroy(); } catch {}
+      this.peer = null;
+    }
   }
 
   cleanup() {
     this.isClosing = true;
     this._clearWatchdog();
-    this._closePeerConnectionOnly();
-    if (this.ws) {
-      try { this.ws.close(); } catch {}
-      this.ws = null;
-    }
+    this._destroyPeerOnly();
   }
 }
